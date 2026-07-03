@@ -1,0 +1,35 @@
+# ================================================================
+# DADOS PESSOAIS / GERADOS PELO USUARIO — nunca subir
+# ================================================================
+
+# CSVs com os dados dos seus Pokemon
+pokegenie_export*.csv
+**/exports/
+
+# Prints da varredura do Pokemon GO (screenshots dos SEUS pokemon)
+**/capturas/
+
+# Config local: caminho do adb + IP da sua rede
+**/config.json
+
+# Perfis de rede: SSID do seu Wi-Fi -> IP (privacidade!)
+**/redes.json
+
+# Calibracao: templates e prints da SUA tela de jogo
+# (cada usuario gera os proprios pela GUI)
+**/calibracao/
+
+# temporarios de captura
+**/_tmp*.png
+
+# ================================================================
+# AMBIENTE / CACHE / LIXO
+# ================================================================
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+.claude/
+**/_lixo/
+_moved.txt
+**/_moved.txt

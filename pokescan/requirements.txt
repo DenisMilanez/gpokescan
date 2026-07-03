@@ -1,0 +1,17 @@
+# Dependencias do PokeScan.
+# A GUI usa Tkinter, que ja vem com o Python padrao (Windows) — nao entra aqui.
+# Deixamos abaixo o que a automacao/analise devera usar. Descomente conforme precisar.
+
+# Processamento de imagens das capturas / calibracao (fatiamento de regioes):
+pillow>=10.0
+
+# Deteccao do icone (segmentacao HSV) e, mais adiante, template matching:
+opencv-python>=4.9
+numpy>=1.26
+
+# OCR: localizar 'AVALIAR' na calibracao (wrapper; o motor Tesseract e instalado
+# pelo setup.bat via winget - UB-Mannheim.TesseractOCR):
+pytesseract>=0.3.10
+
+# Analise/tratamento dos dados:
+# pandas>=2.2
