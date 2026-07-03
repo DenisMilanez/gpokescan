@@ -392,14 +392,28 @@ def _varrer_modo(conn, modo, esperado, parar, log, dica_topo=0):
     prev = None
     estavel = 0
     n_swipes = 0
+    falhas = 0
     teto = max(60, (esperado or 300) // 3 + 30)
     for _ in range(teto):
         if parar.is_set():
             break
         nodes = _parse(_dump_xml(conn))
-        _extrair_linhas(nodes, modo, conn.wm_size, rows)
         sig = _nomes_visiveis(nodes)
-        if sig == prev:
+        if not sig:
+            # Dump falhou (tipico: anuncio em video animando -> uiautomator
+            # nao atinge o idle). NUNCA rolar sem ter lido a tela, senao o
+            # bloco se perde. Espera o anuncio assentar e tenta de novo.
+            falhas += 1
+            if falhas >= 8:
+                log("  [!] tela ilegivel apos varias tentativas; seguindo.")
+                falhas = 0
+            else:
+                time.sleep(1.2)
+                continue
+        else:
+            falhas = 0
+        _extrair_linhas(nodes, modo, conn.wm_size, rows)
+        if sig and sig == prev:
             estavel += 1
             if estavel >= 2:      # tela nao muda mais = fim da lista
                 break
@@ -498,6 +512,9 @@ def executar(conn, modos, log=print, parar=None, saida_dir=None):
         status = "OK" if (esperado and len(rows) == esperado) else "CONFERIR"
         log(f"  {MODO_NOME[modo]}: {len(rows)} unicos "
             f"(esperado {esperado}) [{status}]")
+        if esperado and len(rows) < esperado - 5:
+            log(f"  [!] faltaram {esperado - len(rows)} neste filtro — "
+                f"vale rodar de novo so ele (anuncios podem ter atrapalhado).")
         for chave, dados in rows.items():
             reg = all_rows.setdefault(chave, {})
             for kk, vv in dados.items():
