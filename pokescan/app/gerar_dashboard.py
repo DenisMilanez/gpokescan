@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sys
+import unicodedata
+import urllib.request
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +29,7 @@ from pathlib import Path
 DIR_BASE = Path(__file__).resolve().parent
 DIR_EXPORTS = DIR_BASE / "exports"
 DIR_DASH = DIR_BASE.parent / "dashboard"      # area propria do dashboard
+POKEDEX_CACHE = DIR_BASE / "pokedex.json"     # nome -> numero (baixado 1x do PokeAPI)
 
 LIGAS = [("LC", "Copinha"), ("GL", "Grande Liga"), ("UL", "Ultra Liga")]
 
@@ -46,6 +50,47 @@ def num(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _norm_nome(especie: str, genero: str = "") -> str:
+    """Normaliza o nome do PokeGenie p/ o formato do PokeAPI
+    (ex.: \"Mr. Mime\" -> mr-mime, \"Farfetch'd\" -> farfetchd, Nidoran+M -> nidoran-m)."""
+    s = unicodedata.normalize("NFD", especie.lower().strip())
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")   # tira acentos
+    s = re.sub(r"\(.*?\)", "", s).strip()   # "zygarde (10)" -> "zygarde"
+    if s == "nidoran":
+        s += "-f" if genero == "F" else "-m"
+    s = s.replace("♀", "-f").replace("♂", "-m")
+    for ch in (".", "'", "’", ":"):
+        s = s.replace(ch, "")
+    return re.sub(r"\s+", "-", s.strip())
+
+
+def carregar_pokedex() -> dict:
+    """nome (PokeAPI) -> numero da Pokedex Nacional. Usa o cache local;
+    na primeira vez baixa a lista completa do PokeAPI (1 requisicao)."""
+    if POKEDEX_CACHE.exists():
+        try:
+            return json.loads(POKEDEX_CACHE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    try:
+        url = "https://pokeapi.co/api/v2/pokemon-species?limit=2000"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+        dex = {}
+        for item in data.get("results", []):
+            m = re.search(r"/pokemon-species/(\d+)/?$", item["url"])
+            if m:
+                dex[item["name"]] = int(m.group(1))
+        if dex:
+            POKEDEX_CACHE.write_text(json.dumps(dex), encoding="utf-8")
+        return dex
+    except Exception as e:
+        print(f"[aviso] sem numeros da Pokedex (falha ao baixar do PokeAPI: {e}); "
+              f"a ordenacao por Pokedex ficara indisponivel ate rodar com internet.")
+        return {}
 
 
 def liga_info(row, pre):
@@ -69,12 +114,16 @@ def construir_payload(csv_path: Path) -> dict:
     with open(csv_path, encoding="utf-8-sig") as fh:
         rows = list(csv.DictReader(fh))
 
+    pokedex = carregar_pokedex()
+    sem_dex = set()
     pokes = []
-    for row in rows:
+    for i, row in enumerate(rows):
         p = {
+            "idx": i,                      # ordem de leitura do CSV original
             "especie": row["Especie"],
             "forma": row.get("Forma", ""),
             "genero": row.get("Genero", ""),
+            "dex": pokedex.get(_norm_nome(row["Especie"], row.get("Genero", ""))),
             "pc": num(row.get("PC")),
             "ps": num(row.get("PS")),
             "iv": row.get("IV", ""),
@@ -83,9 +132,14 @@ def construir_payload(csv_path: Path) -> dict:
             "moveset": row.get("Moveset", ""),
             "move_rank": row.get("Move_Rank", ""),
         }
+        if p["dex"] is None:
+            sem_dex.add(row["Especie"])
         for pre, _ in LIGAS:
             p[pre] = liga_info(row, pre)
         pokes.append(p)
+    if sem_dex:
+        print(f"[aviso] {len(sem_dex)} especie(s) sem numero de Pokedex "
+              f"(vao pro fim na ordenacao): {', '.join(sorted(sem_dex)[:10])}")
 
     # --- marca a MELHOR copia de cada especie+forma por liga (estrela) ---
     for pre, _ in LIGAS:
@@ -574,7 +628,8 @@ function montarLimpeza(){
     <label>Grande ≥ <input type="number" id="l-gl" value="90"></label>
     <label>Ultra ≥ <input type="number" id="l-ul" value="90"></label>
     <label>Proteger PC ≥ <input type="number" id="l-pc" value="2500" title="rede de segurança p/ Master/raides (não raspamos a Master League)"></label>
-    <label>Vagas p/ trade <input type="number" id="l-tr" value="20" min="0"></label>`;
+    <label>Trades por espécie ≤ <input type="number" id="l-trsp" value="2" min="0" title="dentre os condenados de cada espécie, os N de maior PC viram Trade"></label>
+    <label>Limite total de trades <input type="number" id="l-tr" value="0" min="0" title="0 = sem limite; se passar, corta priorizando espécies mais raras"></label>`;
   box.appendChild(form);
   const resumo=el('div','cards'); box.appendChild(resumo);
   P.appendChild(box);
@@ -587,11 +642,17 @@ function montarLimpeza(){
   const fMax=el('input'); fMax.type='number'; fMax.placeholder='PC máx'; fMax.style.width='84px';
   const fAcao=el('select');
   fAcao.innerHTML='<option value="">todas as ações</option><option>Excluir</option><option>Trade</option><option>Manter</option>';
+  const fOrd=el('select');
+  fOrd.innerHTML='<option value="dex">ordem: Pokédex</option>'+
+    '<option value="csv">ordem: CSV original</option>'+
+    '<option value="pc-">ordem: PC maior→menor</option>'+
+    '<option value="pc+">ordem: PC menor→maior</option>'+
+    '<option value="az">ordem: Nome A-Z</option>';
   const fPend=el('label','chk'); const ckPend=el('input'); ckPend.type='checkbox';
   fPend.append(ckPend, document.createTextNode(' só pendentes'));
   const btnCsv=el('button',null,'⬇ Exportar CSV do plano');
   btnCsv.style.cssText='background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer';
-  ftools.append(fBusca,fMin,fMax,fAcao,fPend,btnCsv);
+  ftools.append(fBusca,fMin,fMax,fAcao,fOrd,fPend,btnCsv);
   fbox.appendChild(ftools);
   const prog=el('div','note'); fbox.appendChild(prog);
   const grid=el('div','pgrid'); fbox.appendChild(grid);
@@ -604,7 +665,8 @@ function montarLimpeza(){
     const cfg={min:Math.max(1,+$('#l-min').value||1), best:$('#l-best').checked,
       iv:+$('#l-iv').value||999, lc:+$('#l-lc').value||999,
       gl:+$('#l-gl').value||999, ul:+$('#l-ul').value||999,
-      pc:+$('#l-pc').value||1e9, tr:Math.max(0,+$('#l-tr').value||0)};
+      pc:+$('#l-pc').value||1e9,
+      trsp:Math.max(0,+$('#l-trsp').value||0), tr:Math.max(0,+$('#l-tr').value||0)};
     D.pokes.forEach(p=>{p._acao='Excluir'; p._motivo='';});
     // 1) cota: as melhores K copias de cada especie+forma ficam SEMPRE
     const porSF={};
@@ -625,10 +687,24 @@ function montarLimpeza(){
       if(p.UL&&p.UL.rank>=cfg.ul){p._acao='Manter'; p._motivo='Ultra Liga'; return;}
       if((p.pc||0)>=cfg.pc){p._acao='Manter'; p._motivo='PC alto (Master/raide)'; return;}
     });
-    // 3) trade: os MELHORES do descarte (especie mais rara primeiro, PC de desempate)
-    const desc=D.pokes.filter(p=>p._acao==='Excluir');
-    desc.sort((a,b)=>(copias[a.especie+'|'+a.forma]-copias[b.especie+'|'+b.forma])||((b.pc||0)-(a.pc||0)));
-    desc.slice(0,cfg.tr).forEach(p=>{p._acao='Trade'; p._motivo='raro no descarte';});
+    // 3) trade: por especie, ate K condenados de maior PC viram Trade
+    //    (os melhores da especie ja estao protegidos pelas regras acima).
+    //    Limite total opcional corta priorizando especies mais raras.
+    if(cfg.trsp>0){
+      const porEsp={};
+      D.pokes.filter(p=>p._acao==='Excluir')
+        .forEach(p=>{(porEsp[p.especie+'|'+p.forma]=porEsp[p.especie+'|'+p.forma]||[]).push(p);});
+      let cand=[];
+      Object.values(porEsp).forEach(list=>{
+        list.sort((a,b)=>(b.pc||0)-(a.pc||0));
+        cand.push(...list.slice(0,cfg.trsp));
+      });
+      if(cfg.tr>0){
+        cand.sort((a,b)=>(copias[a.especie+'|'+a.forma]-copias[b.especie+'|'+b.forma])||((b.pc||0)-(a.pc||0)));
+        cand=cand.slice(0,cfg.tr);
+      }
+      cand.forEach(p=>{p._acao='Trade'; p._motivo='melhor condenado da espécie';});
+    }
     // resumo
     const c={Manter:0,Trade:0,Excluir:0};
     D.pokes.forEach(p=>c[p._acao]++);
@@ -648,7 +724,15 @@ function montarLimpeza(){
     let lista=D.pokes.filter(p=>(!f||p.especie.toLowerCase().includes(f))
       && (p.pc||0)>=mn && (p.pc||0)<=mx && (!ac||p._acao===ac)
       && (!ckPend.checked || (p._acao!=='Manter' && !feito[p._uid])));
-    lista.sort((a,b)=>(b.pc||0)-(a.pc||0));
+    const ord=fOrd.value;
+    lista.sort((a,b)=>{
+      if(ord==='dex') return ((a.dex??99999)-(b.dex??99999))
+        || a.especie.localeCompare(b.especie) || (b.pc||0)-(a.pc||0);
+      if(ord==='csv') return a.idx-b.idx;
+      if(ord==='pc-') return (b.pc||0)-(a.pc||0);
+      if(ord==='pc+') return (a.pc||0)-(b.pc||0);
+      return a.especie.localeCompare(b.especie) || (b.pc||0)-(a.pc||0);
+    });
     const alvo=D.pokes.filter(p=>p._acao!=='Manter');
     const feitos=alvo.filter(p=>feito[p._uid]).length;
     const corte=lista.length>600;
@@ -662,10 +746,16 @@ function montarLimpeza(){
       const pill=p._acao==='Manter'?'<span class="pill manter">Manter</span>':
                  p._acao==='Trade'?'<span class="pill" style="background:#12283a;color:#7cc0f8;border:1px solid #2b5f8a">Trade</span>':
                  '<span class="pill" style="background:#3a1212;color:#f87171;border:1px solid #7a1f1f">Excluir</span>';
-      card.innerHTML=`<div class="cp">PC <b style="color:var(--txt);font-size:15px">${p.pc??'—'}</b></div>`+
+      const mini=(lab,v)=>v==null
+        ?`<span class="muted" style="font-size:11px">${lab} —</span>`
+        :`<span style="font-size:11px;color:#04121f;background:${rankColor(v)};border-radius:5px;padding:1px 5px;font-weight:700">${lab} ${fmt(v)}%</span>`;
+      card.innerHTML=`<div class="cp">${p.dex?'#'+String(p.dex).padStart(3,'0')+' · ':''}PC <b style="color:var(--txt);font-size:15px">${p.pc??'—'}</b></div>`+
         `<div class="ph">?</div>`+
         `<div><b>${p.especie}</b>${forma} ${gen(p.genero)}</div>`+
         `<div class="muted" style="font-size:12px">IV ${p.iv} · lvl ${p.level} · PS ${p.ps??'—'}</div>`+
+        `<div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap;margin-top:5px">`+
+          mini('PvE',p.iv_pct)+mini('Cop',p.LC?p.LC.rank:null)+
+          mini('GL',p.GL?p.GL.rank:null)+mini('UL',p.UL?p.UL.rank:null)+`</div>`+
         `<div style="margin:6px 0" title="${p._motivo}">${pill}</div>`;
       if(p._acao!=='Manter'){
         const lb=el('label','chk'); lb.style.justifyContent='center';
@@ -697,9 +787,9 @@ function montarLimpeza(){
     a.href=URL.createObjectURL(blob); a.click(); URL.revokeObjectURL(a.href);
   };
 
-  ['l-min','l-best','l-iv','l-lc','l-gl','l-ul','l-pc','l-tr'].forEach(id=>{$('#'+id).onchange=planejar;});
+  ['l-min','l-best','l-iv','l-lc','l-gl','l-ul','l-pc','l-trsp','l-tr'].forEach(id=>{$('#'+id).onchange=planejar;});
   [fBusca,fMin,fMax].forEach(i=>i.oninput=desenhar);
-  fAcao.onchange=desenhar; ckPend.onchange=desenhar;
+  fAcao.onchange=desenhar; fOrd.onchange=desenhar; ckPend.onchange=desenhar;
   planejar();
 }
 
