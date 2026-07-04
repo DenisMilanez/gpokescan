@@ -6,6 +6,9 @@
 pokegenie_export*.csv
 **/exports/
 
+# Dashboard gerado (HTML com os dados da sua colecao embutidos)
+pokescan/dashboard/
+
 # Prints da varredura do Pokemon GO (screenshots dos SEUS pokemon)
 **/capturas/
 
